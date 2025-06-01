@@ -94,7 +94,10 @@ const VolumeCurveChart: React.FC = () => {
               stroke="hsl(var(--primary))" 
               strokeWidth={3} 
               activeDot={{ r: 8, fill: 'hsl(var(--primary))', stroke: 'hsl(var(--background))' }} 
-              dot={(props) => <CustomDot {...props} />}
+              dot={(dotProps: DotProps & { key?: React.Key }) => {
+                const { key, ...restProps } = dotProps;
+                return <CustomDot key={key} {...restProps} />;
+              }}
             />
             {isOn && currentSpeed !== null && currentVolume !== null && (
                <ReferenceDot 
