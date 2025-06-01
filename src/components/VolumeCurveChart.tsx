@@ -14,7 +14,7 @@ interface CustomDotProps extends DotProps {
 }
 
 const CustomDot: React.FC<CustomDotProps> = (props) => {
-  const { cx, cy, stroke, payload, current } = props;
+  const { cx, cy, stroke, current } = props; // Removed payload as it's not used directly in this simplified dot
   if (current) {
     return <circle cx={cx} cy={cy} r={8} fill="hsl(var(--accent))" stroke="hsl(var(--background))" strokeWidth={2} />;
   }
@@ -28,7 +28,7 @@ const VolumeCurveChart: React.FC = () => {
 
   if (!activeProfile) {
     return (
-      <Card className="shadow-lg">
+      <Card className="shadow-lg col-span-1 md:col-span-2">
         <CardHeader>
           <CardTitle className="flex items-center text-xl font-semibold text-foreground">
             <TrendingUp className="mr-2 h-6 w-6 text-primary" />
@@ -36,19 +36,43 @@ const VolumeCurveChart: React.FC = () => {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-muted-foreground">No active profile selected or profile has no curve data.</p>
+          <p className="text-muted-foreground">No active profile selected or profile data is incomplete.</p>
         </CardContent>
       </Card>
     );
   }
 
-  const sortedCurve = [...activeProfile.curve].sort((a, b) => a.speed - b.speed);
-  
-  const chartData = sortedCurve.map(p => ({ speed: p.speed, volume: p.volume }));
+  // Construct chartData to include thresholds and user-defined curve points
+  const allPointsForChart: Array<{ speed: number; volume: number }> = [];
 
-  // Ensure min/max points are implicitly part of the visual range for the line if not explicitly defined
-  // For simplicity, we are plotting only the defined curve points.
-  // A more advanced chart might extend lines to min/maxSpeed from the curve.
+  // Add min threshold point
+  allPointsForChart.push({ speed: activeProfile.minSpeed, volume: activeProfile.minVolume });
+
+  // Add user-defined curve points, ensuring they are distinct from thresholds
+  activeProfile.curve.forEach(p => {
+    // Only add points that are strictly between min and max speed to avoid duplicate points if user accidentally created one matching a threshold
+    // The editor should ideally prevent this, but this is a safeguard.
+    if (p.speed > activeProfile.minSpeed && p.speed < activeProfile.maxSpeed) {
+      allPointsForChart.push({ speed: p.speed, volume: p.volume });
+    }
+  });
+  
+  // Add max threshold point
+  allPointsForChart.push({ speed: activeProfile.maxSpeed, volume: activeProfile.maxVolume });
+
+  // Sort all points by speed and remove duplicates (e.g. if a curve point had same speed as a threshold before filtering)
+  // Using a Map to ensure uniqueness based on speed, preferring the first encountered volume for a given speed if duplicates exist after filtering.
+  // This also helps if minSpeed === maxSpeed (though UI should prevent this), it would just show one point.
+  const uniquePointsMap = new Map<number, number>();
+  allPointsForChart.forEach(p => {
+    if (!uniquePointsMap.has(p.speed)) {
+        uniquePointsMap.set(p.speed, p.volume);
+    }
+  });
+  
+  const chartData = Array.from(uniquePointsMap, ([speed, volume]) => ({ speed, volume }))
+                         .sort((a, b) => a.speed - b.speed);
+
 
   return (
     <Card className="shadow-lg col-span-1 md:col-span-2">
@@ -76,6 +100,7 @@ const VolumeCurveChart: React.FC = () => {
               label={{ value: 'Speed (MPH)', position: 'insideBottom', offset: -15, fill: 'hsl(var(--foreground))' }} 
               stroke="hsl(var(--foreground))"
               domain={['dataMin', 'dataMax']}
+              allowDuplicatedCategory={false}
             />
             <YAxis 
               label={{ value: 'Volume (%)', angle: -90, position: 'insideLeft', fill: 'hsl(var(--foreground))' }} 
@@ -99,7 +124,7 @@ const VolumeCurveChart: React.FC = () => {
                 return <CustomDot key={key} {...restProps} />;
               }}
             />
-            {isOn && currentSpeed !== null && currentVolume !== null && (
+            {isOn && currentSpeed !== null && currentVolume !== null && chartData.length > 0 && (
                <ReferenceDot 
                 x={currentSpeed} 
                 y={currentVolume} 
@@ -108,7 +133,7 @@ const VolumeCurveChart: React.FC = () => {
                 stroke="hsl(var(--background))"
                 strokeWidth={2}
                 isFront={true} 
-                ifOverflow="extendDomain"
+                ifOverflow="extendDomain" // Ensures the dot is visible even if outside the initial domain
                 label={{value: "Current", position:"top", fill: "hsl(var(--accent))"}}
               />
             )}
@@ -120,3 +145,4 @@ const VolumeCurveChart: React.FC = () => {
 };
 
 export default VolumeCurveChart;
+
