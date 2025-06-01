@@ -2,17 +2,16 @@
 "use client";
 
 import type { Profile, CurvePoint } from '@/types';
-import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid'; // Using uuid for unique IDs
 
 // Helper function for linear interpolation
 const interpolateVolume = (speed: number, curve: CurvePoint[], minSpeed: number, minVolume: number, maxSpeed: number, maxVolume: number): number => {
   if (curve.length === 0) {
-    // If no curve points, interpolate between min/max speed/volume
     if (speed <= minSpeed) return minVolume;
     if (speed >= maxSpeed) return maxVolume;
     const speedRange = maxSpeed - minSpeed;
-    if (speedRange <= 0) return maxVolume; // Avoid division by zero
+    if (speedRange <= 0) return maxVolume; 
     const volumeRange = maxVolume - minVolume;
     return minVolume + ((speed - minSpeed) / speedRange) * volumeRange;
   }
@@ -27,23 +26,26 @@ const interpolateVolume = (speed: number, curve: CurvePoint[], minSpeed: number,
     const p2 = sortedCurve[i + 1];
     if (speed >= p1.speed && speed <= p2.speed) {
       const speedRange = p2.speed - p1.speed;
-      if (speedRange === 0) return p1.volume; // Avoid division by zero, return lower point's volume
+      if (speedRange === 0) return p1.volume; 
       const volumeRange = p2.volume - p1.volume;
       return p1.volume + ((speed - p1.speed) / speedRange) * volumeRange;
     }
   }
-  return maxVolume; // Fallback, should ideally be handled by checks above
+  return maxVolume; 
 };
 
+export type GpsPermissionStatus = 'prompt' | 'granted' | 'denied' | 'unavailable';
 
 interface AppContextType {
   isOn: boolean;
   toggleIsOn: () => void;
   currentSpeed: number;
-  setCurrentSpeed: (speed: number) => void;
+  // setCurrentSpeed: (speed: number) => void; // No longer directly set from outside, driven by GPS
   currentVolume: number;
   isGpsSignalLost: boolean;
-  setIsGpsSignalLost: (lost: boolean) => void;
+  setIsGpsSignalLost: (lost: boolean) => void; // Keep for potential manual override or testing
+  gpsPermissionStatus: GpsPermissionStatus;
+  gpsError: string | null;
   profiles: Profile[];
   activeProfileId: string | null;
   setActiveProfileId: (id: string | null) => void;
@@ -79,7 +81,11 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
   const [isOn, setIsOn] = useState(false);
   const [currentSpeed, setCurrentSpeedState] = useState(0);
   const [currentVolume, setCurrentVolume] = useState(0);
-  const [isGpsSignalLost, setIsGpsSignalLost] = useState(false);
+  const [isGpsSignalLost, setIsGpsSignalLostInternal] = useState(false);
+  
+  const [gpsPermissionStatus, setGpsPermissionStatus] = useState<GpsPermissionStatus>('prompt');
+  const [gpsError, setGpsError] = useState<string | null>(null);
+  const watchIdRef = useRef<number | null>(null);
   
   const [profiles, setProfiles] = useState<Profile[]>(() => {
      if (typeof window !== 'undefined') {
@@ -110,7 +116,6 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
   const [showInterstitialAd, setShowInterstitialAd] = useState(false);
   const [interactionsSinceLastAd, setInteractionsSinceLastAd] = useState(0);
 
-  // Persist profiles and activeProfileId to localStorage
   useEffect(() => {
     if (typeof window !== 'undefined') {
       localStorage.setItem('speedVolumeProfiles', JSON.stringify(profiles));
@@ -129,57 +134,141 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
   
   const activeProfile = profiles.find(p => p.id === activeProfileId);
 
-  // Speed simulation and volume calculation
+  // Effect for GPS
   useEffect(() => {
-    let speedInterval: NodeJS.Timeout;
-    let stationaryTimer: NodeJS.Timeout;
+    if (typeof window === 'undefined' || !navigator.geolocation) {
+      setGpsPermissionStatus('unavailable');
+      setGpsError('GPS not supported by this browser.');
+      setIsGpsSignalLostInternal(true);
+      return;
+    }
 
-    if (isOn && activeProfile) {
-      speedInterval = setInterval(() => {
-        if (isGpsSignalLost) {
-          // Keep last known volume or a default if signal lost
-          // For simulation, we'll just stop changing speed
-          return;
-        }
-        // Simulate speed change - realistic would be GPS data
-        const newSpeed = Math.max(0, Math.floor(Math.random() * (activeProfile.maxSpeed + 20))); // Simulate speed up to maxSpeed + 20
-        setCurrentSpeedState(newSpeed);
+    if (isOn) {
+      setGpsError(null); // Clear previous errors on attempt
+      setIsGpsSignalLostInternal(false);
 
-        if (newSpeed === 0) {
-          // Start timer if stationary
-          if (!stationaryTimer) {
-            stationaryTimer = setTimeout(() => {
-              const newVolume = interpolateVolume(0, activeProfile.curve, activeProfile.minSpeed, activeProfile.minVolume, activeProfile.maxSpeed, activeProfile.maxVolume);
-              setCurrentVolume(Math.round(newVolume));
-            }, 5000); // 5 second delay
+      const requestPosition = () => {
+        watchIdRef.current = navigator.geolocation.watchPosition(
+          (position) => {
+            setGpsPermissionStatus('granted');
+            setIsGpsSignalLostInternal(false);
+            setGpsError(null);
+            const speedInMps = position.coords.speed;
+            // Speed is in meters/second, convert to MPH (1 m/s = 2.23694 MPH)
+            setCurrentSpeedState(speedInMps === null ? 0 : Math.round(speedInMps * 2.23694));
+          },
+          (error) => {
+            setIsGpsSignalLostInternal(true);
+            setCurrentSpeedState(0);
+            if (error.code === error.PERMISSION_DENIED) {
+              setGpsPermissionStatus('denied');
+              setGpsError('GPS permission denied. Please enable location services in your browser settings.');
+            } else if (error.code === error.POSITION_UNAVAILABLE) {
+              setGpsError('GPS position unavailable. Ensure you have a clear view of the sky.');
+            } else if (error.code === error.TIMEOUT) {
+              setGpsError('GPS request timed out. Trying again.');
+            } else {
+              setGpsError('An unknown GPS error occurred.');
+            }
+          },
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        );
+      };
+
+      if (gpsPermissionStatus === 'prompt') {
+        navigator.permissions.query({ name: 'geolocation' }).then((permission) => {
+          if (permission.state === 'granted') {
+            setGpsPermissionStatus('granted');
+            requestPosition();
+          } else if (permission.state === 'denied') {
+            setGpsPermissionStatus('denied');
+            setGpsError('GPS permission was previously denied. Please enable it in your browser settings.');
+            setIsGpsSignalLostInternal(true);
+            setCurrentSpeedState(0);
+          } else { // 'prompt'
+            requestPosition(); // This will trigger the browser's permission dialog
           }
-        } else {
-          // Clear timer if moving
-          if (stationaryTimer) {
-            clearTimeout(stationaryTimer);
-          }
-          const newVolume = interpolateVolume(newSpeed, activeProfile.curve, activeProfile.minSpeed, activeProfile.minVolume, activeProfile.maxSpeed, activeProfile.maxVolume);
-          setCurrentVolume(Math.round(newVolume));
+        }).catch(() => {
+            // Fallback for browsers not supporting permissions.query well, directly try watchPosition
+            requestPosition();
+        });
+      } else if (gpsPermissionStatus === 'granted') {
+        requestPosition();
+      }
+      // If 'denied' or 'unavailable', do nothing further here as error messages are already set.
+
+      return () => {
+        if (watchIdRef.current !== null) {
+          navigator.geolocation.clearWatch(watchIdRef.current);
+          watchIdRef.current = null;
         }
-      }, 2000); // Update speed every 2 seconds
+      };
+    } else { // isOn is false
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+      setCurrentSpeedState(0); // Reset speed when turned off
+      // Volume adjustment will be handled by the volume effect
+    }
+  }, [isOn, gpsPermissionStatus]);
+
+
+  // Effect for Volume Calculation
+  useEffect(() => {
+    let stationaryTimerId: NodeJS.Timeout | undefined = undefined;
+
+    if (isOn && activeProfile && gpsPermissionStatus === 'granted' && !isGpsSignalLost) {
+      if (currentSpeed === 0) {
+         // If speed is 0, start a timer. If still 0 after 5s, then adjust volume.
+        stationaryTimerId = setTimeout(() => {
+          if (currentSpeed === 0) { // Check again in case speed changed during timeout
+            const newVolume = interpolateVolume(0, activeProfile.curve, activeProfile.minSpeed, activeProfile.minVolume, activeProfile.maxSpeed, activeProfile.maxVolume);
+            setCurrentVolume(Math.round(newVolume));
+          }
+        }, 5000); // 5 second delay
+      } else {
+        // If speed is not 0, calculate volume immediately
+        const newVolume = interpolateVolume(currentSpeed, activeProfile.curve, activeProfile.minSpeed, activeProfile.minVolume, activeProfile.maxSpeed, activeProfile.maxVolume);
+        setCurrentVolume(Math.round(newVolume));
+      }
     } else {
-      // If turned off, reset volume or set to a user-defined manual volume (not implemented here)
-      // For now, let's set volume based on speed 0 when turned off
+      // If turned off, GPS not granted, or signal lost, set volume based on 0 speed or min volume.
       if (activeProfile) {
-         setCurrentVolume(interpolateVolume(0, activeProfile.curve, activeProfile.minSpeed, activeProfile.minVolume, activeProfile.maxSpeed, activeProfile.maxVolume));
+        setCurrentVolume(interpolateVolume(0, activeProfile.curve, activeProfile.minSpeed, activeProfile.minVolume, activeProfile.maxSpeed, activeProfile.maxVolume));
       } else {
         setCurrentVolume(0);
       }
     }
 
     return () => {
-      clearInterval(speedInterval);
-      clearTimeout(stationaryTimer);
+      if (stationaryTimerId) {
+        clearTimeout(stationaryTimerId);
+      }
     };
-  }, [isOn, activeProfile, isGpsSignalLost]);
+  }, [isOn, currentSpeed, activeProfile, gpsPermissionStatus, isGpsSignalLost]);
 
-  const toggleIsOn = useCallback(() => setIsOn(prev => !prev), []);
-  const setCurrentSpeed = useCallback((speed: number) => setCurrentSpeedState(speed), []);
+
+  const toggleIsOn = useCallback(() => {
+    setIsOn(prev => {
+      const newState = !prev;
+      if (newState && gpsPermissionStatus === 'denied') {
+        // If turning on and permission is denied, prompt user to check settings
+        setGpsError('GPS permission is denied. Please enable location services in your browser settings to use this feature.');
+      } else if (newState && gpsPermissionStatus === 'unavailable') {
+         setGpsError('GPS is not supported by this browser.');
+      }
+      return newState;
+    });
+    // If turning on, the GPS useEffect will handle permission prompt if status is 'prompt'
+  }, [gpsPermissionStatus]);
+  
+  // Expose setIsGpsSignalLost for potential manual override (e.g. testing)
+  // Primarily, isGpsSignalLost is controlled by the GPS effect.
+  const setIsGpsSignalLost = useCallback((lost: boolean) => {
+    setIsGpsSignalLostInternal(lost);
+  }, []);
+
 
   const setActiveProfileId = useCallback((id: string | null) => {
     setActiveProfileIdState(id);
@@ -223,7 +312,7 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
   const getProfileById = useCallback((id: string | null) => profiles.find(p => p.id === id), [profiles]);
 
   const triggerInterstitialAd = useCallback(() => {
-    if(!isOn) { // Only show ads if app is not actively controlling volume
+    if(!isOn) { 
         setShowInterstitialAd(true);
     }
   }, [isOn]);
@@ -236,7 +325,7 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
   const incrementInteractions = useCallback(() => {
     setInteractionsSinceLastAd(prev => {
       const newCount = prev + 1;
-      if (newCount >= 2) { // Trigger ad every 2 significant interactions
+      if (newCount >= 2) { 
         triggerInterstitialAd();
       }
       return newCount;
@@ -247,9 +336,10 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
   return (
     <AppContext.Provider value={{ 
       isOn, toggleIsOn, 
-      currentSpeed, setCurrentSpeed, 
+      currentSpeed, 
       currentVolume, 
       isGpsSignalLost, setIsGpsSignalLost,
+      gpsPermissionStatus, gpsError,
       profiles, activeProfileId, setActiveProfileId, 
       addProfile, updateProfile, deleteProfile, getProfileById,
       showInterstitialAd, triggerInterstitialAd, resetInterstitialAd,
@@ -269,3 +359,5 @@ export const useAppContext = () => {
 };
 
 export default AppProvider;
+
+    

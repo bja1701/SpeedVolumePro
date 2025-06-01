@@ -12,15 +12,15 @@ import InterstitialAd from '@/components/InterstitialAd';
 import PremiumUpgradeModal from '@/components/PremiumUpgradeModal';
 import type { PremiumUpgradeModalRef } from '@/components/PremiumUpgradeModal';
 import { useAppContext } from '@/contexts/AppContext';
-import { Button } from '@/components/ui/button';
-import { AlertTriangle } from 'lucide-react';
+// import { Button } from '@/components/ui/button'; // No longer needed for GPS toggle
+// import { AlertTriangle } from 'lucide-react'; // No longer needed for GPS toggle
 
 export default function HomePage() {
   const { 
     showInterstitialAd, 
     resetInterstitialAd,
-    isGpsSignalLost,
-    setIsGpsSignalLost
+    // isGpsSignalLost, // Handled within SpeedDisplay now based on context
+    // setIsGpsSignalLost // No longer manually toggled here
   } = useAppContext();
   
   const [isPremiumModalOpen, setIsPremiumModalOpen] = useState(false);
@@ -30,11 +30,6 @@ export default function HomePage() {
     setIsPremiumModalOpen(true);
   };
   
-  // Mock GPS signal loss toggle for testing
-  const toggleGpsSignal = () => {
-    setIsGpsSignalLost(!isGpsSignalLost);
-  };
-
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
       <Header onUpgradeClick={handleUpgradeClick} />
@@ -46,11 +41,7 @@ export default function HomePage() {
             <OnOffToggle />
             <SpeedDisplay />
             <VolumeDisplay />
-             {/* GPS Signal Simulation Button - For Dev/Demo */}
-            <Button onClick={toggleGpsSignal} variant="outline" className="w-full">
-              <AlertTriangle className="mr-2 h-4 w-4" />
-              Toggle GPS Signal ({isGpsSignalLost ? "Lost" : "OK"})
-            </Button>
+            {/* GPS Signal Simulation Button Removed */}
           </div>
 
           {/* Right Column / Configuration & Visualization */}
@@ -74,3 +65,5 @@ export default function HomePage() {
     </div>
   );
 }
+
+    
