@@ -12,7 +12,7 @@ import {
   DialogClose,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Crown, Zap, Infinite, ShieldOff } from 'lucide-react';
+import { Crown, Zap, Infinity, ShieldOff } from 'lucide-react';
 
 export interface PremiumUpgradeModalRef {
   openModal: () => void;
@@ -56,7 +56,7 @@ const PremiumUpgradeModal = React.forwardRef<PremiumUpgradeModalRef, PremiumUpgr
                 </div>
               </li>
               <li className="flex items-start">
-                <Infinite className="h-7 w-7 text-accent mr-3 mt-1 flex-shrink-0" />
+                <Infinity className="h-7 w-7 text-accent mr-3 mt-1 flex-shrink-0" />
                 <div>
                   <span className="font-semibold">Unlimited Profiles:</span> Create and save as many custom profiles as you need.
                 </div>
