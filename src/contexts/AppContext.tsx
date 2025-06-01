@@ -40,10 +40,9 @@ interface AppContextType {
   isOn: boolean;
   toggleIsOn: () => void;
   currentSpeed: number;
-  // setCurrentSpeed: (speed: number) => void; // No longer directly set from outside, driven by GPS
   currentVolume: number;
   isGpsSignalLost: boolean;
-  setIsGpsSignalLost: (lost: boolean) => void; // Keep for potential manual override or testing
+  setIsGpsSignalLost: (lost: boolean) => void; 
   gpsPermissionStatus: GpsPermissionStatus;
   gpsError: string | null;
   profiles: Profile[];
@@ -87,38 +86,45 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
   const [gpsError, setGpsError] = useState<string | null>(null);
   const watchIdRef = useRef<number | null>(null);
   
-  const [profiles, setProfiles] = useState<Profile[]>(() => {
-     if (typeof window !== 'undefined') {
-      const savedProfiles = localStorage.getItem('speedVolumeProfiles');
-      if (savedProfiles) {
-        try {
-          const parsedProfiles = JSON.parse(savedProfiles);
-          return parsedProfiles.length > 0 ? parsedProfiles : [defaultProfile];
-        } catch (error) {
-          console.error("Failed to parse profiles from localStorage", error);
-          return [defaultProfile];
-        }
-      }
-    }
-    return [defaultProfile];
-  });
-
-  const [activeProfileId, setActiveProfileIdState] = useState<string | null>(() => {
-    if (typeof window !== 'undefined') {
-      const savedActiveId = localStorage.getItem('speedVolumeActiveProfileId');
-      if (savedActiveId && profiles.find(p => p.id === savedActiveId)) {
-        return savedActiveId;
-      }
-    }
-    return profiles.length > 0 ? profiles[0].id : null;
-  });
+  const [profiles, setProfiles] = useState<Profile[]>([defaultProfile]);
+  const [activeProfileId, setActiveProfileIdState] = useState<string | null>(defaultProfile.id);
   
   const [showInterstitialAd, setShowInterstitialAd] = useState(false);
   const [interactionsSinceLastAd, setInteractionsSinceLastAd] = useState(0);
 
+  // Load profiles and activeProfileId from localStorage after initial mount
+  useEffect(() => {
+    const savedProfiles = localStorage.getItem('speedVolumeProfiles');
+    if (savedProfiles) {
+      try {
+        const parsedProfiles = JSON.parse(savedProfiles);
+        if (parsedProfiles.length > 0) {
+          setProfiles(parsedProfiles);
+          const savedActiveId = localStorage.getItem('speedVolumeActiveProfileId');
+          if (savedActiveId && parsedProfiles.find((p: Profile) => p.id === savedActiveId)) {
+            setActiveProfileIdState(savedActiveId);
+          } else {
+            setActiveProfileIdState(parsedProfiles[0].id);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to parse profiles from localStorage", error);
+        // Keep default profile if parsing fails
+      }
+    }
+  }, []);
+
+
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      localStorage.setItem('speedVolumeProfiles', JSON.stringify(profiles));
+      // Only save to localStorage if profiles is not the initial default value (or more robust check)
+      // This prevents overwriting localStorage with defaults if it was empty initially
+      // For simplicity, we're saving on any change after initial load.
+      if (profiles.length > 0 && !(profiles.length === 1 && profiles[0].id === defaultProfile.id && profiles[0].name === defaultProfile.name)) {
+         localStorage.setItem('speedVolumeProfiles', JSON.stringify(profiles));
+      } else if (profiles.length === 0) { // If all profiles are deleted
+         localStorage.removeItem('speedVolumeProfiles');
+      }
     }
   }, [profiles]);
 
@@ -144,7 +150,7 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
     }
 
     if (isOn) {
-      setGpsError(null); // Clear previous errors on attempt
+      setGpsError(null); 
       setIsGpsSignalLostInternal(false);
 
       const requestPosition = () => {
@@ -154,7 +160,6 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
             setIsGpsSignalLostInternal(false);
             setGpsError(null);
             const speedInMps = position.coords.speed;
-            // Speed is in meters/second, convert to MPH (1 m/s = 2.23694 MPH)
             setCurrentSpeedState(speedInMps === null ? 0 : Math.round(speedInMps * 2.23694));
           },
           (error) => {
@@ -185,17 +190,15 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
             setGpsError('GPS permission was previously denied. Please enable it in your browser settings.');
             setIsGpsSignalLostInternal(true);
             setCurrentSpeedState(0);
-          } else { // 'prompt'
-            requestPosition(); // This will trigger the browser's permission dialog
+          } else { 
+            requestPosition(); 
           }
         }).catch(() => {
-            // Fallback for browsers not supporting permissions.query well, directly try watchPosition
             requestPosition();
         });
       } else if (gpsPermissionStatus === 'granted') {
         requestPosition();
       }
-      // If 'denied' or 'unavailable', do nothing further here as error messages are already set.
 
       return () => {
         if (watchIdRef.current !== null) {
@@ -203,13 +206,12 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
           watchIdRef.current = null;
         }
       };
-    } else { // isOn is false
+    } else { 
       if (watchIdRef.current !== null) {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
       }
-      setCurrentSpeedState(0); // Reset speed when turned off
-      // Volume adjustment will be handled by the volume effect
+      setCurrentSpeedState(0); 
     }
   }, [isOn, gpsPermissionStatus]);
 
@@ -220,20 +222,17 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
 
     if (isOn && activeProfile && gpsPermissionStatus === 'granted' && !isGpsSignalLost) {
       if (currentSpeed === 0) {
-         // If speed is 0, start a timer. If still 0 after 5s, then adjust volume.
         stationaryTimerId = setTimeout(() => {
-          if (currentSpeed === 0) { // Check again in case speed changed during timeout
+          if (currentSpeed === 0) { 
             const newVolume = interpolateVolume(0, activeProfile.curve, activeProfile.minSpeed, activeProfile.minVolume, activeProfile.maxSpeed, activeProfile.maxVolume);
             setCurrentVolume(Math.round(newVolume));
           }
-        }, 5000); // 5 second delay
+        }, 5000); 
       } else {
-        // If speed is not 0, calculate volume immediately
         const newVolume = interpolateVolume(currentSpeed, activeProfile.curve, activeProfile.minSpeed, activeProfile.minVolume, activeProfile.maxSpeed, activeProfile.maxVolume);
         setCurrentVolume(Math.round(newVolume));
       }
     } else {
-      // If turned off, GPS not granted, or signal lost, set volume based on 0 speed or min volume.
       if (activeProfile) {
         setCurrentVolume(interpolateVolume(0, activeProfile.curve, activeProfile.minSpeed, activeProfile.minVolume, activeProfile.maxSpeed, activeProfile.maxVolume));
       } else {
@@ -253,18 +252,14 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
     setIsOn(prev => {
       const newState = !prev;
       if (newState && gpsPermissionStatus === 'denied') {
-        // If turning on and permission is denied, prompt user to check settings
         setGpsError('GPS permission is denied. Please enable location services in your browser settings to use this feature.');
       } else if (newState && gpsPermissionStatus === 'unavailable') {
          setGpsError('GPS is not supported by this browser.');
       }
       return newState;
     });
-    // If turning on, the GPS useEffect will handle permission prompt if status is 'prompt'
   }, [gpsPermissionStatus]);
   
-  // Expose setIsGpsSignalLost for potential manual override (e.g. testing)
-  // Primarily, isGpsSignalLost is controlled by the GPS effect.
   const setIsGpsSignalLost = useCallback((lost: boolean) => {
     setIsGpsSignalLostInternal(lost);
   }, []);
@@ -275,7 +270,7 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const addProfile = useCallback((name: string): Profile => {
-    const newProfile: Profile = {
+    const newProfileData: Profile = {
       id: uuidv4(),
       name,
       curve: [
@@ -288,9 +283,9 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
       maxSpeed: 100,
       maxVolume: 100,
     };
-    setProfiles(prev => [...prev, newProfile]);
+    setProfiles(prev => [...prev, newProfileData]);
     incrementInteractions();
-    return newProfile;
+    return newProfileData;
   }, []);
 
   const updateProfile = useCallback((updatedProfile: Profile) => {
@@ -359,5 +354,3 @@ export const useAppContext = () => {
 };
 
 export default AppProvider;
-
-    
