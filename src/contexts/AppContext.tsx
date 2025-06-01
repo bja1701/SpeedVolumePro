@@ -6,32 +6,51 @@ import React, { createContext, useContext, useState, useEffect, ReactNode, useCa
 import { v4 as uuidv4 } from 'uuid'; // Using uuid for unique IDs
 
 // Helper function for linear interpolation
-const interpolateVolume = (speed: number, curve: CurvePoint[], minSpeed: number, minVolume: number, maxSpeed: number, maxVolume: number): number => {
-  if (curve.length === 0) {
-    if (speed <= minSpeed) return minVolume;
-    if (speed >= maxSpeed) return maxVolume;
-    const speedRange = maxSpeed - minSpeed;
-    if (speedRange <= 0) return maxVolume; 
-    const volumeRange = maxVolume - minVolume;
-    return minVolume + ((speed - minSpeed) / speedRange) * volumeRange;
+const interpolateVolume = (speed: number, userCurve: CurvePoint[], minSpeed: number, minVolume: number, maxSpeed: number, maxVolume: number): number => {
+  // 1. Construct the full curve including thresholds
+  const pointsMap = new Map<number, number>();
+  pointsMap.set(minSpeed, minVolume); // Start with min threshold
+
+  // Add user-defined points, ensuring they are strictly between min and max speed
+  userCurve.forEach(p => {
+    if (p.speed > minSpeed && p.speed < maxSpeed) {
+      pointsMap.set(p.speed, p.volume);
+    }
+  });
+  pointsMap.set(maxSpeed, maxVolume); // Ensure max threshold is authoritative
+
+  const sortedFullCurve = Array.from(pointsMap.entries())
+                         .map(([s, v]) => ({ speed: s, volume: v }))
+                         .sort((a, b) => a.speed - b.speed);
+
+  if (sortedFullCurve.length === 0) {
+    return minVolume; 
+  }
+  if (sortedFullCurve.length === 1) {
+    return sortedFullCurve[0].volume; 
   }
 
-  const sortedCurve = [...curve].sort((a, b) => a.speed - b.speed);
+  if (speed <= sortedFullCurve[0].speed) {
+    return sortedFullCurve[0].volume;
+  }
+  if (speed >= sortedFullCurve[sortedFullCurve.length - 1].speed) {
+    return sortedFullCurve[sortedFullCurve.length - 1].volume;
+  }
 
-  if (speed <= sortedCurve[0].speed) return sortedCurve[0].volume;
-  if (speed >= sortedCurve[sortedCurve.length - 1].speed) return sortedCurve[sortedCurve.length - 1].volume;
-
-  for (let i = 0; i < sortedCurve.length - 1; i++) {
-    const p1 = sortedCurve[i];
-    const p2 = sortedCurve[i + 1];
+  for (let i = 0; i < sortedFullCurve.length - 1; i++) {
+    const p1 = sortedFullCurve[i];
+    const p2 = sortedFullCurve[i + 1];
     if (speed >= p1.speed && speed <= p2.speed) {
       const speedRange = p2.speed - p1.speed;
-      if (speedRange === 0) return p1.volume; 
+      if (speedRange === 0) { 
+        return p1.volume;
+      }
       const volumeRange = p2.volume - p1.volume;
       return p1.volume + ((speed - p1.speed) / speedRange) * volumeRange;
     }
   }
-  return maxVolume; 
+  
+  return sortedFullCurve[sortedFullCurve.length - 1].volume;
 };
 
 export type GpsPermissionStatus = 'prompt' | 'granted' | 'denied' | 'unavailable';
@@ -66,15 +85,14 @@ const defaultProfile: Profile = {
   id: defaultProfileId,
   name: 'Default Car',
   curve: [
-    { id: uuidv4(), speed: 0, volume: 20 },
     { id: uuidv4(), speed: 30, volume: 60 },
-    { id: uuidv4(), speed: 60, volume: 100 },
   ],
   minSpeed: 0,
-  minVolume: 0,
-  maxSpeed: 100,
+  minVolume: 20,
+  maxSpeed: 60,
   maxVolume: 100,
 };
+
 
 const AppProvider = ({ children }: { children: ReactNode }) => {
   const [isOn, setIsOn] = useState(false);
@@ -92,13 +110,12 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
   const [showInterstitialAd, setShowInterstitialAd] = useState(false);
   const [interactionsSinceLastAd, setInteractionsSinceLastAd] = useState(0);
 
-  // Load profiles and activeProfileId from localStorage after initial mount
   useEffect(() => {
     const savedProfiles = localStorage.getItem('speedVolumeProfiles');
     if (savedProfiles) {
       try {
         const parsedProfiles = JSON.parse(savedProfiles);
-        if (parsedProfiles.length > 0) {
+        if (Array.isArray(parsedProfiles) && parsedProfiles.length > 0) {
           setProfiles(parsedProfiles);
           const savedActiveId = localStorage.getItem('speedVolumeActiveProfileId');
           if (savedActiveId && parsedProfiles.find((p: Profile) => p.id === savedActiveId)) {
@@ -106,25 +123,25 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
           } else {
             setActiveProfileIdState(parsedProfiles[0].id);
           }
+        } else if (Array.isArray(parsedProfiles) && parsedProfiles.length === 0) {
+           setProfiles([defaultProfile]);
+           setActiveProfileIdState(defaultProfile.id);
         }
       } catch (error) {
         console.error("Failed to parse profiles from localStorage", error);
-        // Keep default profile if parsing fails
+        setProfiles([defaultProfile]);
+        setActiveProfileIdState(defaultProfile.id);
       }
+    } else {
+      setProfiles([defaultProfile]);
+      setActiveProfileIdState(defaultProfile.id);
     }
   }, []);
 
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      // Only save to localStorage if profiles is not the initial default value (or more robust check)
-      // This prevents overwriting localStorage with defaults if it was empty initially
-      // For simplicity, we're saving on any change after initial load.
-      if (profiles.length > 0 && !(profiles.length === 1 && profiles[0].id === defaultProfile.id && profiles[0].name === defaultProfile.name)) {
-         localStorage.setItem('speedVolumeProfiles', JSON.stringify(profiles));
-      } else if (profiles.length === 0) { // If all profiles are deleted
-         localStorage.removeItem('speedVolumeProfiles');
-      }
+      localStorage.setItem('speedVolumeProfiles', JSON.stringify(profiles));
     }
   }, [profiles]);
 
@@ -140,7 +157,6 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
   
   const activeProfile = profiles.find(p => p.id === activeProfileId);
 
-  // Effect for GPS
   useEffect(() => {
     if (typeof window === 'undefined' || !navigator.geolocation) {
       setGpsPermissionStatus('unavailable');
@@ -180,25 +196,23 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
         );
       };
 
-      if (gpsPermissionStatus === 'prompt') {
-        navigator.permissions.query({ name: 'geolocation' }).then((permission) => {
-          if (permission.state === 'granted') {
-            setGpsPermissionStatus('granted');
-            requestPosition();
-          } else if (permission.state === 'denied') {
-            setGpsPermissionStatus('denied');
-            setGpsError('GPS permission was previously denied. Please enable it in your browser settings.');
-            setIsGpsSignalLostInternal(true);
-            setCurrentSpeedState(0);
-          } else { 
-            requestPosition(); 
-          }
-        }).catch(() => {
-            requestPosition();
-        });
-      } else if (gpsPermissionStatus === 'granted') {
-        requestPosition();
-      }
+      navigator.permissions.query({ name: 'geolocation' }).then((permission) => {
+        if (permission.state === 'granted') {
+          setGpsPermissionStatus('granted');
+          requestPosition();
+        } else if (permission.state === 'denied') {
+          setGpsPermissionStatus('denied');
+          setGpsError('GPS permission was previously denied. Please enable it in your browser settings.');
+          setIsGpsSignalLostInternal(true);
+          setCurrentSpeedState(0);
+        } else { 
+          setGpsPermissionStatus('prompt'); 
+          requestPosition(); 
+        }
+      }).catch(() => {
+          setGpsPermissionStatus('prompt');
+          requestPosition();
+      });
 
       return () => {
         if (watchIdRef.current !== null) {
@@ -211,19 +225,17 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
       }
-      setCurrentSpeedState(0); 
     }
-  }, [isOn, gpsPermissionStatus]);
+  }, [isOn]);
 
 
-  // Effect for Volume Calculation
   useEffect(() => {
     let stationaryTimerId: NodeJS.Timeout | undefined = undefined;
 
     if (isOn && activeProfile && gpsPermissionStatus === 'granted' && !isGpsSignalLost) {
       if (currentSpeed === 0) {
         stationaryTimerId = setTimeout(() => {
-          if (currentSpeed === 0) { 
+          if (currentSpeed === 0 && isOn && activeProfile && gpsPermissionStatus === 'granted' && !isGpsSignalLost) { 
             const newVolume = interpolateVolume(0, activeProfile.curve, activeProfile.minSpeed, activeProfile.minVolume, activeProfile.maxSpeed, activeProfile.maxVolume);
             setCurrentVolume(Math.round(newVolume));
           }
@@ -234,9 +246,9 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
       }
     } else {
       if (activeProfile) {
-        setCurrentVolume(interpolateVolume(0, activeProfile.curve, activeProfile.minSpeed, activeProfile.minVolume, activeProfile.maxSpeed, activeProfile.maxVolume));
+        setCurrentVolume(Math.round(interpolateVolume(0, activeProfile.curve, activeProfile.minSpeed, activeProfile.minVolume, activeProfile.maxSpeed, activeProfile.maxVolume)));
       } else {
-        setCurrentVolume(0);
+        setCurrentVolume(0); 
       }
     }
 
@@ -251,10 +263,14 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
   const toggleIsOn = useCallback(() => {
     setIsOn(prev => {
       const newState = !prev;
-      if (newState && gpsPermissionStatus === 'denied') {
-        setGpsError('GPS permission is denied. Please enable location services in your browser settings to use this feature.');
-      } else if (newState && gpsPermissionStatus === 'unavailable') {
-         setGpsError('GPS is not supported by this browser.');
+      if (newState) { 
+        if (gpsPermissionStatus === 'denied') {
+          setGpsError('GPS permission is denied. Please enable location services.');
+        } else if (gpsPermissionStatus === 'unavailable') {
+          setGpsError('GPS is not supported by this browser.');
+        } else {
+          setGpsError(null); 
+        }
       }
       return newState;
     });
@@ -269,63 +285,72 @@ const AppProvider = ({ children }: { children: ReactNode }) => {
     setActiveProfileIdState(id);
   }, []);
 
+  // Ad and Interaction Logic
+  const triggerInterstitialAd = useCallback(() => {
+    setShowInterstitialAd(true);
+  }, []); // Stable: depends only on a state setter
+
+  const triggerInterstitialAdRef = useRef(triggerInterstitialAd);
+  useEffect(() => {
+    triggerInterstitialAdRef.current = triggerInterstitialAd;
+  }, [triggerInterstitialAd]);
+
+  const resetInterstitialAd = useCallback(() => {
+    setShowInterstitialAd(false);
+    setInteractionsSinceLastAd(0); // setInteractionsSinceLastAd is stable
+  }, []); // Stable: depends only on state setters
+
+  const incrementInteractions = useCallback(() => {
+    setInteractionsSinceLastAd(prev => { // setInteractionsSinceLastAd is stable
+      const newCount = prev + 1;
+      if (newCount >= 2) {
+        triggerInterstitialAdRef.current(); // Call via ref
+      }
+      return newCount;
+    });
+  }, []); // Stable: depends only on a state setter (implicitly) and a ref
+
+  // Profile Management Logic (depends on stable incrementInteractions)
   const addProfile = useCallback((name: string): Profile => {
     const newProfileData: Profile = {
       id: uuidv4(),
       name,
-      curve: [
-        { id: uuidv4(), speed: 0, volume: 20 },
-        { id: uuidv4(), speed: 30, volume: 60 },
-        { id: uuidv4(), speed: 60, volume: 100 },
+      curve: [ 
+         { id: uuidv4(), speed: 20, volume: 40 },
+         { id: uuidv4(), speed: 40, volume: 80 },
       ],
       minSpeed: 0,
-      minVolume: 0,
-      maxSpeed: 100,
+      minVolume: 10,
+      maxSpeed: 80,
       maxVolume: 100,
     };
     setProfiles(prev => [...prev, newProfileData]);
     incrementInteractions();
     return newProfileData;
-  }, []);
+  }, [incrementInteractions]); // Now depends on a stable incrementInteractions
 
   const updateProfile = useCallback((updatedProfile: Profile) => {
     setProfiles(prev => prev.map(p => p.id === updatedProfile.id ? updatedProfile : p));
     incrementInteractions();
-  }, []);
+  }, [incrementInteractions]); // Now depends on a stable incrementInteractions
 
   const deleteProfile = useCallback((id: string) => {
     setProfiles(prev => {
       const newProfiles = prev.filter(p => p.id !== id);
       if (activeProfileId === id) {
-        setActiveProfileIdState(newProfiles.length > 0 ? newProfiles[0].id : null);
+        if (newProfiles.length > 0) {
+          setActiveProfileIdState(newProfiles[0].id);
+        } else {
+          setActiveProfileIdState(defaultProfile.id); 
+          return [defaultProfile]; 
+        }
       }
-      return newProfiles;
+      return newProfiles.length > 0 ? newProfiles : [defaultProfile];
     });
     incrementInteractions();
-  }, [activeProfileId]);
+  }, [activeProfileId, incrementInteractions]); // Now depends on a stable incrementInteractions
 
   const getProfileById = useCallback((id: string | null) => profiles.find(p => p.id === id), [profiles]);
-
-  const triggerInterstitialAd = useCallback(() => {
-    if(!isOn) { 
-        setShowInterstitialAd(true);
-    }
-  }, [isOn]);
-  
-  const resetInterstitialAd = useCallback(() => {
-    setShowInterstitialAd(false);
-    setInteractionsSinceLastAd(0);
-  }, []);
-
-  const incrementInteractions = useCallback(() => {
-    setInteractionsSinceLastAd(prev => {
-      const newCount = prev + 1;
-      if (newCount >= 2) { 
-        triggerInterstitialAd();
-      }
-      return newCount;
-    });
-  }, [triggerInterstitialAd]);
 
 
   return (
@@ -354,3 +379,4 @@ export const useAppContext = () => {
 };
 
 export default AppProvider;
+
